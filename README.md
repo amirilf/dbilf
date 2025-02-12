@@ -35,7 +35,7 @@ This project aims to design and build a **lightweight in-memory data storage sys
 
 #### 6. Client API
 
-Provide a simple command-line interface (CLI) or Java API for interaction
+-   Provide a simple command-line interface (CLI) or Java API for interaction
 
 <br>
 
