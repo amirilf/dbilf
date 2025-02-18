@@ -15,7 +15,6 @@ public final class Database {
         return DB;
     }
 
-    // TODO: replace runtime exceptions with defined exceptions later
     public void createTable(String tableName, Schema schema) {
         Table table = new Table(tableName, schema);
         if (tables.putIfAbsent(tableName, table) != null) {
@@ -32,7 +31,8 @@ public final class Database {
     }
 
     public void deleteTable(String tableName) {
-        tables.remove(tableName);
+        if (tables.remove(tableName) == null) {
+            throw new RuntimeException("Table " + tableName + " does not exist");
+        }
     }
-
 }
