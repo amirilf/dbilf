@@ -5,14 +5,14 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class Database {
 
-    private static final Database DB = new Database();
+    private static final Database INSTANCE = new Database();
     private final Map<String, Table> tables = new ConcurrentHashMap<>();
 
     private Database() {
     }
 
-    public static Database getDB() {
-        return DB;
+    public static Database getInstance() {
+        return INSTANCE;
     }
 
     public void createTable(String tableName, Schema schema) {

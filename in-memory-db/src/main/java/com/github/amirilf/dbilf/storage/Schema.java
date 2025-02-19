@@ -9,7 +9,7 @@ import lombok.Getter;
 @Getter
 public final class Schema {
 
-    private static final AtomicLong pkID = new AtomicLong(0);
+    private final AtomicLong pkSequence = new AtomicLong(1);
     private final Field<?> pkField;
     private final Map<String, Field<?>> fields;
 
@@ -23,7 +23,7 @@ public final class Schema {
     }
 
     public Long getAndIncrement() {
-        return pkID.getAndIncrement();
+        return pkSequence.getAndIncrement();
     }
 
     public static class Builder {
@@ -38,7 +38,7 @@ public final class Schema {
             Field<?> field = new Field<>(name, type, primaryKey, maxLength);
             if (primaryKey) {
                 if (pkField != null) {
-                    throw new RuntimeException("Schema already has a PK on '" + name + "' field!");
+                    throw new RuntimeException("Schema already has a primary key field");
                 }
                 pkField = field;
             }
@@ -59,9 +59,8 @@ public final class Schema {
         }
 
         public Schema build() {
-            // TODO: note we assume user can not set pk and id field
             if (fields.containsKey("id") || fields.values().stream().anyMatch(Field::isPrimaryKey)) {
-                throw new RuntimeException("There can't be an 'id' field or a primary key field");
+                throw new RuntimeException("There cannot be an 'id' field or an explicit primary key field");
             }
             addField("id", Long.class, true);
             return new Schema(fields, pkField);

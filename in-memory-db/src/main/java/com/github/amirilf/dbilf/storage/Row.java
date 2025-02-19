@@ -3,7 +3,6 @@ package com.github.amirilf.dbilf.storage;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.EqualsAndHashCode;
 
 @EqualsAndHashCode
@@ -25,16 +24,17 @@ public final class Row {
 
     public static class Builder {
 
-        private final Map<String, Object> data = new ConcurrentHashMap<>();
+        private final Map<String, Object> data = new HashMap<>();
         private final Schema schema;
+        private boolean customID = false;
 
         public Builder(Schema schema) {
             this.schema = schema;
         }
 
         public Builder set(String fieldName, Object value) {
-            if (fieldName.equals("id")) {
-                throw new RuntimeException("The id field will be handled automatically");
+            if ("id".equals(fieldName)) {
+                throw new RuntimeException("The id field is managed automatically");
             }
             if (!schema.getFields().containsKey(fieldName)) {
                 throw new RuntimeException("Field " + fieldName + " does not exist in schema");
@@ -43,8 +43,16 @@ public final class Row {
             return this;
         }
 
+        public Builder setId(Object value) {
+            data.put("id", value);
+            customID = true;
+            return this;
+        }
+
         public Row build() {
-            data.put("id", schema.getAndIncrement());
+            if (!customID) {
+                data.put("id", schema.getAndIncrement());
+            }
             schema.getFields().forEach((fieldName, field) -> {
                 if (!data.containsKey(fieldName)) {
                     throw new RuntimeException("Field " + fieldName + " is not set");

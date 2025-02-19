@@ -24,7 +24,4 @@ public final class Field<T> {
         }
         return true;
     }
-
-    // there could be validation for each type
-
 }

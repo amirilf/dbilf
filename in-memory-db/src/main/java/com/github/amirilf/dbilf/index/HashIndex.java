@@ -1,7 +1,6 @@
 package com.github.amirilf.dbilf.index;
 
 import com.github.amirilf.dbilf.storage.Row;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -26,16 +25,19 @@ public final class HashIndex implements Index {
             throw new RuntimeException("Value for field " + fieldName + " cannot be null");
         }
         if (unique) {
-            if (indexMap.containsKey(value)) {
-                throw new RuntimeException("Duplicate value for unique index on field " + fieldName);
-            }
-            CopyOnWriteArrayList<Row> list = new CopyOnWriteArrayList<>();
-            list.add(row);
-            indexMap.put(value, list);
+            indexMap.compute(value, (k, list) -> {
+                if (list != null && !list.isEmpty()) {
+                    throw new RuntimeException("Duplicate value for unique index on field " + fieldName);
+                }
+                CopyOnWriteArrayList<Row> newList = new CopyOnWriteArrayList<>();
+                newList.add(row);
+                return newList;
+            });
         } else {
             indexMap.compute(value, (k, list) -> {
-                if (list == null)
+                if (list == null) {
                     list = new CopyOnWriteArrayList<>();
+                }
                 list.add(row);
                 return list;
             });
@@ -44,10 +46,9 @@ public final class HashIndex implements Index {
 
     @Override
     public void update(Row oldRow, Row newRow) {
-        // we sure oldValue already existed in our database
         Object oldValue = oldRow.getValue(fieldName);
         Object newValue = newRow.getValue(fieldName);
-        if (newValue == null || oldValue == null) {
+        if (oldValue == null || newValue == null) {
             throw new RuntimeException("Value for field " + fieldName + " cannot be null");
         }
         if (!oldValue.equals(newValue)) {
@@ -58,9 +59,9 @@ public final class HashIndex implements Index {
             if (list != null) {
                 list.remove(oldRow);
                 list.add(newRow);
-            } else
-                // we expect to have such key in our index, cuz it's the same with old one
-                throw new RuntimeException("There is no indexed value for: " + newValue);
+            } else {
+                throw new RuntimeException("Indexed value for " + newValue + " not found");
+            }
         }
     }
 
@@ -72,7 +73,7 @@ public final class HashIndex implements Index {
         }
         indexMap.computeIfPresent(value, (k, list) -> {
             list.remove(row);
-            return list.isEmpty() ? null : list; // no need at all but anyway
+            return list.isEmpty() ? null : list;
         });
     }
 
