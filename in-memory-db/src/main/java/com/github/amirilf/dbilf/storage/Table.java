@@ -95,6 +95,7 @@ public final class Table {
     public List<Row> read(Object key, String fieldName) {
         lock.readLock().lock();
         try {
+
             if (!schema.getFields().containsKey(fieldName)) {
                 throw new RuntimeException("Field " + fieldName + " does not exist in schema");
             }
@@ -102,9 +103,17 @@ public final class Table {
             if (!fieldType.isInstance(key)) {
                 throw new RuntimeException("Key type does not match field: " + fieldName);
             }
+
+            // check if searched with `id` field
             if (schema.getPKField().getName().equals(fieldName)) {
-                return read(key);
+                Row row = rows.get(key);
+                if (row == null) {
+                    throw new RuntimeException("No row found with key: " + key);
+                }
+                return Collections.singletonList(row);
             }
+
+            // check if there is any available index to search with
             Index index = indexes.get(fieldName);
             if (index != null) {
                 List<Row> results = index.search(key);
@@ -113,6 +122,8 @@ public final class Table {
                 }
                 return results;
             }
+
+            // simple iteration to find result
             List<Row> result = new ArrayList<>();
             for (Row row : rows.values()) {
                 Object val = row.getValue(fieldName);
@@ -123,20 +134,9 @@ public final class Table {
             if (result.isEmpty()) {
                 throw new RuntimeException("No row found with key: " + key);
             }
+            System.out.println("Using iteration");
             return result;
-        } finally {
-            lock.readLock().unlock();
-        }
-    }
 
-    public List<Row> read(Object key) {
-        lock.readLock().lock();
-        try {
-            Row row = rows.get(key);
-            if (row == null) {
-                throw new RuntimeException("No row found with key: " + key);
-            }
-            return Collections.singletonList(row);
         } finally {
             lock.readLock().unlock();
         }
