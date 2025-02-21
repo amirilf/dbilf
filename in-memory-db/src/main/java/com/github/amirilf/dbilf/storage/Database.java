@@ -1,6 +1,8 @@
 package com.github.amirilf.dbilf.storage;
 
+import java.util.Collections;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class Database {
@@ -13,6 +15,10 @@ public final class Database {
 
     public static Database getInstance() {
         return INSTANCE;
+    }
+
+    public Set<String> getTableNames() {
+        return Collections.unmodifiableSet(tables.keySet());
     }
 
     public void createTable(String tableName, Schema schema) {
