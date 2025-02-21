@@ -2,6 +2,8 @@ package com.github.amirilf.dbilf.storage;
 
 import com.github.amirilf.dbilf.index.HashIndex;
 import com.github.amirilf.dbilf.index.Index;
+import com.github.amirilf.dbilf.transaction.TransactionManager;
+import com.github.amirilf.dbilf.transaction.Transaction;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -87,6 +89,18 @@ public final class Table {
                 throw new RuntimeException("Duplicate primary key value: " + key);
             }
             indexes.values().forEach(index -> index.insert(row));
+            Transaction tx = TransactionManager.getCurrentTransaction();
+            if (tx != null) {
+                TransactionManager.register(() -> {
+                    lock.writeLock().lock();
+                    try {
+                        indexes.values().forEach(index -> index.delete(row));
+                        rows.remove(key);
+                    } finally {
+                        lock.writeLock().unlock();
+                    }
+                });
+            }
         } finally {
             lock.writeLock().unlock();
         }
@@ -95,7 +109,6 @@ public final class Table {
     public List<Row> read(Object key, String fieldName) {
         lock.readLock().lock();
         try {
-
             if (!schema.getFields().containsKey(fieldName)) {
                 throw new RuntimeException("Field " + fieldName + " does not exist in schema");
             }
@@ -103,8 +116,6 @@ public final class Table {
             if (!fieldType.isInstance(key)) {
                 throw new RuntimeException("Key type does not match field: " + fieldName);
             }
-
-            // check if searched with `id` field
             if (schema.getPKField().getName().equals(fieldName)) {
                 Row row = rows.get(key);
                 if (row == null) {
@@ -112,8 +123,6 @@ public final class Table {
                 }
                 return Collections.singletonList(row);
             }
-
-            // check if there is any available index to search with
             Index index = indexes.get(fieldName);
             if (index != null) {
                 List<Row> results = index.search(key);
@@ -122,8 +131,6 @@ public final class Table {
                 }
                 return results;
             }
-
-            // simple iteration to find result
             List<Row> result = new ArrayList<>();
             for (Row row : rows.values()) {
                 Object val = row.getValue(fieldName);
@@ -136,7 +143,6 @@ public final class Table {
             }
             System.out.println("Using iteration");
             return result;
-
         } finally {
             lock.readLock().unlock();
         }
@@ -153,6 +159,18 @@ public final class Table {
             if (oldRow.equals(newRow)) {
                 throw new RuntimeException("No changes detected for update");
             }
+            Transaction tx = TransactionManager.getCurrentTransaction();
+            if (tx != null) {
+                TransactionManager.register(() -> {
+                    lock.writeLock().lock();
+                    try {
+                        indexes.values().forEach(index -> index.update(newRow, oldRow));
+                        rows.put(key, oldRow);
+                    } finally {
+                        lock.writeLock().unlock();
+                    }
+                });
+            }
             indexes.values().forEach(index -> index.update(oldRow, newRow));
             rows.put(key, newRow);
         } finally {
@@ -166,6 +184,18 @@ public final class Table {
             Row oldRow = rows.get(key);
             if (oldRow == null) {
                 throw new RuntimeException("No row found with key: " + key);
+            }
+            Transaction tx = TransactionManager.getCurrentTransaction();
+            if (tx != null) {
+                TransactionManager.register(() -> {
+                    lock.writeLock().lock();
+                    try {
+                        rows.put(key, oldRow);
+                        indexes.values().forEach(index -> index.insert(oldRow));
+                    } finally {
+                        lock.writeLock().unlock();
+                    }
+                });
             }
             indexes.values().forEach(index -> index.delete(oldRow));
             rows.remove(key);
