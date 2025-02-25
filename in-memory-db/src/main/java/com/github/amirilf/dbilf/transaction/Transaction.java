@@ -1,28 +1,54 @@
 package com.github.amirilf.dbilf.transaction;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class Transaction {
-
     private final List<Operation> undos = new ArrayList<>();
+    private final List<Runnable> lockReleases = new ArrayList<>();
+    private boolean active = true;
 
     public void register(Operation op) {
-        undos.add(op);
+        if (active)
+            undos.add(op);
+    }
+
+    public void registerLockRelease(Runnable release) {
+        if (active)
+            lockReleases.add(release);
+    }
+
+    public void commit() {
+        if (!active)
+            return;
+        active = false;
+        undos.clear();
+        releaseLocks();
     }
 
     public void rollback() {
-        for (int i = undos.size() - 1; i >= 0; i--) {
+        if (!active)
+            return;
+        active = false;
+        Collections.reverse(undos);
+        undos.forEach(op -> {
             try {
-                undos.get(i).undo();
+                op.undo();
             } catch (Exception e) {
                 e.printStackTrace();
             }
-        }
+        });
         undos.clear();
+        releaseLocks();
     }
 
-    public void clear() {
-        undos.clear();
+    private void releaseLocks() {
+        lockReleases.forEach(Runnable::run);
+        lockReleases.clear();
+    }
+
+    public boolean isActive() {
+        return active;
     }
 }

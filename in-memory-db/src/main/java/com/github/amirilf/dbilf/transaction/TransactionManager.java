@@ -1,36 +1,37 @@
 package com.github.amirilf.dbilf.transaction;
 
-import java.util.concurrent.locks.ReentrantLock;
-
 public class TransactionManager {
-
     private static final ThreadLocal<Transaction> currentTransaction = new ThreadLocal<>();
-    private static final ReentrantLock globalLock = new ReentrantLock();
 
     public static void begin() {
-        globalLock.lock();
-        Transaction tx = new Transaction();
-        currentTransaction.set(tx);
+        if (currentTransaction.get() != null) {
+            throw new IllegalStateException("Transaction already active");
+        }
+        currentTransaction.set(new Transaction());
     }
 
     public static void commit() {
         Transaction tx = currentTransaction.get();
         if (tx == null) {
-            throw new RuntimeException("No active transaction");
+            throw new IllegalStateException("No active transaction");
         }
-        tx.clear();
-        currentTransaction.remove();
-        globalLock.unlock();
+        try {
+            tx.commit();
+        } finally {
+            currentTransaction.remove();
+        }
     }
 
     public static void rollback() {
         Transaction tx = currentTransaction.get();
         if (tx == null) {
-            throw new RuntimeException("No active transaction");
+            throw new IllegalStateException("No active transaction");
         }
-        tx.rollback();
-        currentTransaction.remove();
-        globalLock.unlock();
+        try {
+            tx.rollback();
+        } finally {
+            currentTransaction.remove();
+        }
     }
 
     public static Transaction getCurrentTransaction() {
@@ -39,7 +40,7 @@ public class TransactionManager {
 
     public static void register(Operation op) {
         Transaction tx = currentTransaction.get();
-        if (tx != null) {
+        if (tx != null && tx.isActive()) {
             tx.register(op);
         }
     }

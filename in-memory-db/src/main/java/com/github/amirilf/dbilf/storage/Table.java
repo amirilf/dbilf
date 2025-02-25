@@ -17,7 +17,8 @@ public final class Table {
     private final Schema schema;
     private final Map<Long, Row> rows = new ConcurrentHashMap<>();
     private final Map<String, Index> indexes = new ConcurrentHashMap<>();
-    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock tableLock = new ReentrantReadWriteLock();
+    private final ConcurrentHashMap<Long, ReentrantReadWriteLock> rowLocks = new ConcurrentHashMap<>();
 
     public Table(String name, Schema schema) {
         this.name = name;
@@ -37,16 +38,16 @@ public final class Table {
     }
 
     public List<Row> getRows() {
-        lock.readLock().lock();
+        tableLock.readLock().lock();
         try {
             return Collections.unmodifiableList(new ArrayList<>(rows.values()));
         } finally {
-            lock.readLock().unlock();
+            tableLock.readLock().unlock();
         }
     }
 
     public void addIndex(String fieldName, boolean unique) {
-        lock.writeLock().lock();
+        tableLock.writeLock().lock();
         try {
             if (indexes.containsKey(fieldName) || "id".equals(fieldName)) {
                 throw new RuntimeException("Index on field " + fieldName + " already exists");
@@ -58,12 +59,12 @@ public final class Table {
             rows.values().forEach(index::insert);
             indexes.put(fieldName, index);
         } finally {
-            lock.writeLock().unlock();
+            tableLock.writeLock().unlock();
         }
     }
 
     public void removeIndex(String fieldName) {
-        lock.writeLock().lock();
+        tableLock.writeLock().lock();
         try {
             if (!indexes.containsKey(fieldName)) {
                 throw new RuntimeException("Index on field " + fieldName + " does not exist");
@@ -73,134 +74,166 @@ public final class Table {
             }
             indexes.remove(fieldName);
         } finally {
-            lock.writeLock().unlock();
+            tableLock.writeLock().unlock();
         }
     }
 
     public void create(Row row) {
-        lock.writeLock().lock();
+        Long key = (Long) row.getValue(schema.getPKField().getName());
+        ReentrantReadWriteLock lock = rowLocks.computeIfAbsent(key, k -> new ReentrantReadWriteLock());
+        ReentrantReadWriteLock.WriteLock writeLock = lock.writeLock();
+        writeLock.lock();
+        boolean lockRegistered = false;
         try {
-            Field<?> pk = schema.getPKField();
-            Long key = (Long) row.getValue(pk.getName());
-            if (key == null) {
-                throw new RuntimeException("Primary key field '" + pk.getName() + "' cannot be null");
+            if (rows.containsKey(key)) {
+                throw new RuntimeException("Duplicate primary key: " + key);
             }
-            if (rows.putIfAbsent(key, row) != null) {
-                throw new RuntimeException("Duplicate primary key value: " + key);
-            }
+            rows.put(key, row);
             indexes.values().forEach(index -> index.insert(row));
             Transaction tx = TransactionManager.getCurrentTransaction();
             if (tx != null) {
-                TransactionManager.register(() -> {
-                    lock.writeLock().lock();
-                    try {
-                        indexes.values().forEach(index -> index.delete(row));
-                        rows.remove(key);
-                    } finally {
-                        lock.writeLock().unlock();
-                    }
+                tx.register(() -> {
+                    rows.remove(key);
+                    rowLocks.remove(key);
+                    indexes.values().forEach(index -> index.delete(row));
                 });
+                tx.registerLockRelease(() -> writeLock.unlock());
+                lockRegistered = true;
             }
         } finally {
-            lock.writeLock().unlock();
+            if (!lockRegistered) {
+                writeLock.unlock();
+            }
         }
     }
 
     public List<Row> read(Object key, String fieldName) {
-        lock.readLock().lock();
-        try {
-            if (!schema.getFields().containsKey(fieldName)) {
-                throw new RuntimeException("Field " + fieldName + " does not exist in schema");
+        if (!schema.getFields().containsKey(fieldName)) {
+            throw new RuntimeException("Field " + fieldName + " does not exist in schema");
+        }
+        Class<?> fieldType = schema.getFields().get(fieldName).getType();
+        if (!fieldType.isInstance(key)) {
+            throw new RuntimeException("Key type does not match field: " + fieldName);
+        }
+        if (schema.getPKField().getName().equals(fieldName)) {
+            Long pkKey = (Long) key;
+            ReentrantReadWriteLock lock = rowLocks.get(pkKey);
+            if (lock == null) {
+                return Collections.emptyList();
             }
-            Class<?> fieldType = schema.getFields().get(fieldName).getType();
-            if (!fieldType.isInstance(key)) {
-                throw new RuntimeException("Key type does not match field: " + fieldName);
-            }
-            if (schema.getPKField().getName().equals(fieldName)) {
-                Row row = rows.get(key);
-                if (row == null) {
-                    throw new RuntimeException("No row found with key: " + key);
+            ReentrantReadWriteLock.ReadLock readLock = lock.readLock();
+            readLock.lock();
+            boolean lockRegistered = false;
+            try {
+                Row row = rows.get(pkKey);
+                Transaction tx = TransactionManager.getCurrentTransaction();
+                if (tx != null) {
+                    tx.registerLockRelease(() -> readLock.unlock());
+                    lockRegistered = true;
                 }
                 return Collections.singletonList(row);
+            } finally {
+                if (!lockRegistered) {
+                    readLock.unlock();
+                }
             }
+        } else {
+            // first try the index.
             Index index = indexes.get(fieldName);
+            List<Row> results;
             if (index != null) {
-                List<Row> results = index.search(key);
+                results = index.search(key);
                 if (results.isEmpty()) {
                     throw new RuntimeException("No row found with key: " + key);
                 }
-                return results;
-            }
-            List<Row> result = new ArrayList<>();
-            for (Row row : rows.values()) {
-                Object val = row.getValue(fieldName);
-                if (val != null && val.equals(key)) {
-                    result.add(row);
+            } else {
+                // a full scan.
+                results = scanNonIndexed(fieldName, key);
+                if (results.isEmpty()) {
+                    throw new RuntimeException("No row found with key: " + key);
                 }
             }
-            if (result.isEmpty()) {
-                throw new RuntimeException("No row found with key: " + key);
+            // transactional context: lock each returned row.
+            Transaction tx = TransactionManager.getCurrentTransaction();
+            if (tx != null) {
+                results.forEach(row -> {
+                    Long pk = (Long) row.getValue(schema.getPKField().getName());
+                    ReentrantReadWriteLock rowLock = rowLocks.get(pk);
+                    if (rowLock != null) {
+                        ReentrantReadWriteLock.ReadLock rLock = rowLock.readLock();
+                        rLock.lock();
+                        tx.registerLockRelease(() -> rLock.unlock());
+                    }
+                });
             }
-            System.out.println("Using iteration");
-            return result;
-        } finally {
-            lock.readLock().unlock();
+            return results;
         }
     }
 
     public void update(Row newRow) {
-        lock.writeLock().lock();
+        Long key = (Long) newRow.getValue(schema.getPKField().getName());
+        ReentrantReadWriteLock lock = rowLocks.get(key);
+        if (lock == null)
+            throw new RuntimeException("Row not found");
+        ReentrantReadWriteLock.WriteLock writeLock = lock.writeLock();
+        writeLock.lock();
+        boolean lockRegistered = false;
         try {
-            Long key = (Long) newRow.getValue(schema.getPKField().getName());
             Row oldRow = rows.get(key);
-            if (oldRow == null) {
-                throw new RuntimeException("No record found to update for key: " + key);
-            }
-            if (oldRow.equals(newRow)) {
-                throw new RuntimeException("No changes detected for update");
-            }
-            Transaction tx = TransactionManager.getCurrentTransaction();
-            if (tx != null) {
-                TransactionManager.register(() -> {
-                    lock.writeLock().lock();
-                    try {
-                        indexes.values().forEach(index -> index.update(newRow, oldRow));
-                        rows.put(key, oldRow);
-                    } finally {
-                        lock.writeLock().unlock();
-                    }
-                });
-            }
             indexes.values().forEach(index -> index.update(oldRow, newRow));
             rows.put(key, newRow);
+            Transaction tx = TransactionManager.getCurrentTransaction();
+            if (tx != null) {
+                tx.register(() -> {
+                    rows.put(key, oldRow);
+                    indexes.values().forEach(index -> index.update(newRow, oldRow));
+                });
+                tx.registerLockRelease(() -> writeLock.unlock());
+                lockRegistered = true;
+            }
         } finally {
-            lock.writeLock().unlock();
+            if (!lockRegistered) {
+                writeLock.unlock();
+            }
         }
     }
 
     public void delete(Long key) {
-        lock.writeLock().lock();
+        ReentrantReadWriteLock lock = rowLocks.get(key);
+        if (lock == null)
+            throw new RuntimeException("Row not found");
+        ReentrantReadWriteLock.WriteLock writeLock = lock.writeLock();
+        writeLock.lock();
+        boolean lockRegistered = false;
         try {
             Row oldRow = rows.get(key);
-            if (oldRow == null) {
-                throw new RuntimeException("No row found with key: " + key);
-            }
+            rows.remove(key);
+            indexes.values().forEach(index -> index.delete(oldRow));
             Transaction tx = TransactionManager.getCurrentTransaction();
             if (tx != null) {
-                TransactionManager.register(() -> {
-                    lock.writeLock().lock();
-                    try {
-                        rows.put(key, oldRow);
-                        indexes.values().forEach(index -> index.insert(oldRow));
-                    } finally {
-                        lock.writeLock().unlock();
-                    }
+                tx.register(() -> {
+                    rows.put(key, oldRow);
+                    indexes.values().forEach(index -> index.insert(oldRow));
                 });
+                tx.registerLockRelease(() -> writeLock.unlock());
+                lockRegistered = true;
             }
-            indexes.values().forEach(index -> index.delete(oldRow));
-            rows.remove(key);
         } finally {
-            lock.writeLock().unlock();
+            if (!lockRegistered) {
+                writeLock.unlock();
+            }
         }
     }
+
+    private List<Row> scanNonIndexed(String fieldName, Object key) {
+        List<Row> result = new ArrayList<>();
+        for (Row row : rows.values()) {
+            Object val = row.getValue(fieldName);
+            if (val != null && val.equals(key)) {
+                result.add(row);
+            }
+        }
+        return result;
+    }
+
 }
