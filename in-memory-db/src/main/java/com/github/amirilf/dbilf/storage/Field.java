@@ -16,6 +16,15 @@ public final class Field<T> {
         if (value == null) {
             return false;
         }
+        if (type.equals(char[].class)) {
+            if (!(value instanceof char[])) {
+                return false;
+            }
+            if (maxLength > 0 && ((char[]) value).length > maxLength) {
+                return false;
+            }
+            return true;
+        }
         if (!type.isInstance(value)) {
             return false;
         }
