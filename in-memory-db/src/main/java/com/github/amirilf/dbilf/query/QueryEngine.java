@@ -144,7 +144,6 @@ public class QueryEngine {
         try {
             Table table = Database.getInstance().getTable(cmd.getTableName());
             Schema schema = table.getSchema();
-            // Validate requested columns (if not "*")
             if (cmd.getSelectColumns() != null && !cmd.getSelectColumns().isEmpty()) {
                 for (String col : cmd.getSelectColumns()) {
                     if (!schema.getFields().containsKey(col)) {
@@ -159,10 +158,12 @@ public class QueryEngine {
             } else {
                 rows = table.getRows();
             }
+            if (rows.isEmpty()) {
+                return "No rows found";
+            }
             StringBuilder sb = new StringBuilder();
             for (Row row : rows) {
                 if (cmd.getSelectColumns() == null || cmd.getSelectColumns().isEmpty()) {
-                    // For '*' selection, iterate over each key-value pair using formatting
                     StringJoiner joiner = new StringJoiner(", ");
                     for (Map.Entry<String, Object> entry : row.getData().entrySet()) {
                         joiner.add(entry.getKey() + "=" + formatValue(entry.getValue()));
@@ -186,25 +187,28 @@ public class QueryEngine {
     private static String handleUpdate(Command cmd) {
         try {
             Table table = Database.getInstance().getTable(cmd.getTableName());
-            if (cmd.getConditionColumn() == null)
-                return "UPDATE must include WHERE clause on primary key";
-            Object id = parseValue(cmd.getConditionValue().toString(), table.getSchema(), cmd.getConditionColumn());
+            Schema schema = table.getSchema();
+            if (cmd.getConditionColumn() == null ||
+                    !cmd.getConditionColumn().equalsIgnoreCase(schema.getPKField().getName())) {
+                return "UPDATE must include WHERE clause on primary key (" + schema.getPKField().getName() + ")";
+            }
+            Object id = parseValue(cmd.getConditionValue().toString(), schema, cmd.getConditionColumn());
             List<Row> rows = table.read(id, cmd.getConditionColumn());
-            if (rows.size() != 1)
+            if (rows.isEmpty())
                 return "Row not found for id: " + id;
             Row oldRow = rows.get(0);
-            Row.Builder builder = new Row.Builder(table.getSchema());
+            Row.Builder builder = new Row.Builder(schema);
             oldRow.getData().forEach((k, v) -> {
-                if (!k.equals("id")) {
+                if (!k.equalsIgnoreCase(schema.getPKField().getName())) {
                     builder.set(k, v);
                 } else {
                     builder.setId(v);
                 }
             });
             for (Map.Entry<String, Object> entry : cmd.getUpdateValues().entrySet()) {
-                if (entry.getKey().equalsIgnoreCase("id"))
+                if (entry.getKey().equalsIgnoreCase(schema.getPKField().getName()))
                     continue;
-                Object value = parseValue(entry.getValue().toString(), table.getSchema(), entry.getKey());
+                Object value = parseValue(entry.getValue().toString(), schema, entry.getKey());
                 builder.set(entry.getKey(), value);
             }
             Row newRow = builder.build();
@@ -218,11 +222,34 @@ public class QueryEngine {
     private static String handleDelete(Command cmd) {
         try {
             Table table = Database.getInstance().getTable(cmd.getTableName());
-            if (cmd.getConditionColumn() == null)
-                return "DELETE must include WHERE clause on primary key";
-            Object id = parseValue(cmd.getConditionValue().toString(), table.getSchema(), cmd.getConditionColumn());
-            table.delete((Long) id);
-            return "Row deleted from " + cmd.getTableName();
+            Schema schema = table.getSchema();
+            if (cmd.getConditionColumn() == null) {
+                return "DELETE must include WHERE clause";
+            } else if (cmd.getConditionColumn().equalsIgnoreCase(schema.getPKField().getName())) {
+                Object id = parseValue(cmd.getConditionValue().toString(), schema, cmd.getConditionColumn());
+                List<Row> existing = table.read(id, cmd.getConditionColumn());
+                if (existing.isEmpty()) {
+                    return "No row found for id: " + id;
+                }
+                table.delete((Long) id);
+                return "Row deleted from " + cmd.getTableName();
+            } else {
+                Object value = parseValue(cmd.getConditionValue().toString(), schema, cmd.getConditionColumn());
+                List<Row> matching = table.read(value, cmd.getConditionColumn());
+                if (matching.isEmpty()) {
+                    return "No rows found for " + cmd.getConditionColumn() + " = " + value;
+                }
+                int count = 0;
+                for (Row row : matching) {
+                    Long id = (Long) row.getValue(schema.getPKField().getName());
+                    List<Row> check = table.read(id, schema.getPKField().getName());
+                    if (!check.isEmpty()) {
+                        table.delete(id);
+                        count++;
+                    }
+                }
+                return count + " rows deleted from " + cmd.getTableName();
+            }
         } catch (Exception e) {
             return "Error in DELETE: " + e.getMessage();
         }

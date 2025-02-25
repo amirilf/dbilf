@@ -126,6 +126,9 @@ public final class Table {
             boolean lockRegistered = false;
             try {
                 Row row = rows.get(pkKey);
+                if (row == null) {
+                    return Collections.emptyList();
+                }
                 Transaction tx = TransactionManager.getCurrentTransaction();
                 if (tx != null) {
                     tx.registerLockRelease(() -> readLock.unlock());
@@ -138,22 +141,13 @@ public final class Table {
                 }
             }
         } else {
-            // first try the index.
             Index index = indexes.get(fieldName);
             List<Row> results;
             if (index != null) {
                 results = index.search(key);
-                if (results.isEmpty()) {
-                    throw new RuntimeException("No row found with key: " + key);
-                }
             } else {
-                // a full scan.
                 results = scanNonIndexed(fieldName, key);
-                if (results.isEmpty()) {
-                    throw new RuntimeException("No row found with key: " + key);
-                }
             }
-            // transactional context: lock each returned row.
             Transaction tx = TransactionManager.getCurrentTransaction();
             if (tx != null) {
                 results.forEach(row -> {
@@ -235,5 +229,4 @@ public final class Table {
         }
         return result;
     }
-
 }
