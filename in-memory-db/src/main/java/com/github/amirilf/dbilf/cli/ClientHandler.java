@@ -4,7 +4,6 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.net.Socket;
-
 import com.github.amirilf.dbilf.query.QueryEngine;
 
 public class ClientHandler implements Runnable {
@@ -20,16 +19,20 @@ public class ClientHandler implements Runnable {
         try (
                 BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true)) {
-            out.println("<<DBILF>>\n'exit' to disconnect.");
+
+            out.println("<<DBILF>> Type 'exit' to disconnect.");
+            out.print("dbilf> ");
+            out.flush();
             String line;
             while ((line = in.readLine()) != null) {
-                System.out.print("> ");
                 if (line.equalsIgnoreCase("exit")) {
                     out.println("Goodbye!");
                     break;
                 }
                 String result = QueryEngine.execute(line);
                 out.println(result);
+                out.print("dbilf> ");
+                out.flush();
             }
         } catch (Exception e) {
             e.printStackTrace();

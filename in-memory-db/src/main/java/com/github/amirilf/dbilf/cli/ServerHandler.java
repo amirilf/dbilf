@@ -3,12 +3,12 @@ package com.github.amirilf.dbilf.cli;
 import java.net.ServerSocket;
 import java.net.Socket;
 
-public class DatabaseServer {
+public class ServerHandler {
 
     private int port;
     private boolean running;
 
-    public DatabaseServer(int port) {
+    public ServerHandler(int port) {
         this.port = port;
     }
 
@@ -18,6 +18,7 @@ public class DatabaseServer {
             System.out.println("DB Server started on port " + port);
             while (running) {
                 Socket clientSocket = serverSocket.accept();
+                System.out.println("A client connected...");
                 new Thread(new ClientHandler(clientSocket)).start();
             }
         } catch (Exception e) {
@@ -28,5 +29,4 @@ public class DatabaseServer {
     public void stop() {
         running = false;
     }
-
 }
